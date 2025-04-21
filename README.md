@@ -6,5 +6,5 @@
 <br>
 <br>
 # 資料など
-- **[Go & Spannerの練習](https://confluence.10antz.net/x/jmk8C)**
-- **[サーバーの分からないことメモ](https://confluence.10antz.net/x/wmQ8C)**
+- **[Go & Spannerの練習](https://confluence.10antz.net/x/jmk8C)**：　伊藤さんから頂いた学習用の資料
+- **[サーバーの分からないことメモ](https://confluence.10antz.net/x/wmQ8C)**：　学習した内容などをまとめたメモ
