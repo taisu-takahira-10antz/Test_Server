@@ -6,5 +6,5 @@
 <br>
 <br>
 # 資料など
-- TODO：　後でURL入れる
-- TODO：　後でURL入れる
+- **[Go & Spannerの練習](https://confluence.10antz.net/x/jmk8C)**
+- **[サーバーの分からないことメモ](https://confluence.10antz.net/x/wmQ8C)**
