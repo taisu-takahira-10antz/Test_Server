@@ -1,11 +1,14 @@
 package main
 
 import (
+	"EmulatorAndApiServerTest/sub"
+	"flag"
+	"os"
+
 	"context"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 
 	"cloud.google.com/go/spanner"
 	"github.com/gin-gonic/gin"
@@ -15,7 +18,7 @@ import (
 type User struct {
 	ID    int64   `json:"id"`
 	Name  string  `json:"name"`
-	Money float64 `json:"money"`
+	Money string  `json:"money"`
 }
 
 // spannerClient は Spanner クライアント
@@ -25,18 +28,29 @@ var spannerClient *spanner.Client
 var dbName string
 
 func main() {
-	// 環境変数から Spanner エミュレータのホストを取得
-	emulatorHost := os.Getenv("SPANNER_EMULATOR_HOST")
-	if emulatorHost != "" {
-		os.Setenv("SPANNER_EMULATOR_HOST", emulatorHost)
+	PortNumStr := ":8080" // デフォルトポート番号
+	// 環境変数からポート番号を取得
+	serverPort := os.Getenv("TEST_EMULATORS_API_SERVER_PORT")
+	if serverPort != "" {
+		PortNumStr = serverPort
 	}
+	
+	// 変数でflagを定義
+	var (
+		p = flag.String("p", "memory-dev-3dc1b", "プロジェクトID")       // -p オプションでプロジェクトIDを指定する
+		i = flag.String("i", "takahira-test-instance", "インスタンスID") // -i オプションでインスタンスIDを指定する
+		d = flag.String("d", "takahira-test-databases", "データベース名") // -d オプションでデータベース名を指定する
+	)
+	// ここで解析
+	flag.Parse()
 
 	ctx := context.Background()
 
 	// Spanner クライアントの初期化
-	projectID := "memory-dev-3dc1b"                                                                                 // プロジェクトID
-	instanceID := "takahira-test-instance"                                                                          // インスタンスID
-	dbName = fmt.Sprintf("projects/%s/instances/%s/databases/%s", projectID, instanceID, "takahira-test-databases") // データベース名
+	projectID := *p                                                                          // プロジェクトID
+	instanceID := *i                                                                         // インスタンスID
+	dbName = fmt.Sprintf("projects/%s/instances/%s/databases/%s", projectID, instanceID, *d) // データベース名
+	fmt.Println(dbName)
 
 	client, err := spanner.NewClient(ctx, dbName)
 	if err != nil {
@@ -52,9 +66,10 @@ func main() {
 	r.GET("/users/get/id", getUserId)
 	r.GET("/users/get/all", getUserAll)
 	r.PUT("/users/update", updateUser)
+	r.PUT("/users/update/addmoney", addUserMoney)
 	r.DELETE("/users/delete", deleteUser)
 
-	r.Run(":8080")
+	r.Run(PortNumStr)
 }
 
 // createUser は新しいユーザーを作成する
@@ -64,7 +79,7 @@ func createUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	log.Println("Received user data:", user) // ログ出力
+	// log.Println("Received user data:", user) // ログ出力
 
 	_, err := spannerClient.ReadWriteTransaction(context.Background(), func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		stmt := spanner.Statement{
@@ -77,7 +92,7 @@ func createUser(c *gin.Context) {
 		}
 		_, err := txn.Update(ctx, stmt)
 		if err != nil {
-			return fmt.Errorf("failed to insert user: %w", err)
+			return err
 		}
 		return nil
 	})
@@ -92,16 +107,31 @@ func createUser(c *gin.Context) {
 
 // IDでユーザーを取得する
 func getUserId(c *gin.Context) {
-	user := findUser(c)
-	if user != nil {
-		c.JSON(http.StatusOK, user)
+	var responseUser User
+	if err := c.BindJSON(&responseUser); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Could not bind JSON", "data": err.Error()})
 		return
 	}
+	key := spanner.Key{responseUser.ID}
+	
+	row, err := spannerClient.Single().ReadRow(context.Background(), "Users", key, []string{"id", "name", "money"})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Not found user id", "data": err.Error()})
+		return
+	}
+
+	var postUser User
+	if err := row.ToStruct(&postUser); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Not found user id", "data": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, postUser)
 }
 
 // すべてのユーザーを取得する
 func getUserAll(c *gin.Context) {
-	iter := spannerClient.ReadOnlyTransaction().Read(context.Background(), "Users", spanner.AllKeys(), []string{"id", "name", "money"})
+	iter := spannerClient.Single().Read(context.Background(), "Users", spanner.AllKeys(), []string{"id", "name", "money"})
 	defer iter.Stop()
 
 	users := []User{}
@@ -157,24 +187,87 @@ func updateUser(c *gin.Context) {
 	c.JSON(http.StatusOK, responseUser)
 }
 
-// IDでユーザーを削除する
-func deleteUser(c *gin.Context) {
-	user := findUser(c)
-	if user == nil {
+// IDでユーザーの所持金を追加して更新する
+func addUserMoney(c *gin.Context) {
+	var responseUser User
+	if err := c.BindJSON(&responseUser); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	// ユーザーデータを更新する
 	_, err := spannerClient.ReadWriteTransaction(context.Background(), func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		// 現在の money の値を読み取る
+		row, err := txn.ReadRow(ctx, "Users", spanner.Key{responseUser.ID}, []string{"money"})
+		if err != nil {
+			return err
+		}
+		var currentMoney string
+		if err := row.Columns(&currentMoney); err != nil {
+			return err
+		}
+
+		// 新しい money の値を計算
+		if responseUser.Money, err = sub.AddNum(currentMoney, responseUser.Money); err != nil {
+			return err
+		}
+		
+		// 新しい money の値で更新
+		stmt := spanner.Statement{
+			SQL: "UPDATE Users SET money = @money WHERE id = @id",
+			Params: map[string]interface{}{
+				"id": responseUser.ID,
+				"money": responseUser.Money,
+			},
+		}
+		count, err := txn.Update(ctx, stmt)
+		if err != nil {
+			return err
+		} else if count == 0 {
+			return fmt.Errorf("update user count: 0")
+		}
+		return nil
+	})
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update user", "data": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, responseUser)
+}
+
+// IDでユーザーを削除する
+func deleteUser(c *gin.Context) {
+	var user User
+	if err := c.BindJSON(&user); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// ユーザーデータを削除する
+	var deleteUserData User
+	_, err := spannerClient.ReadWriteTransaction(context.Background(), func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		row, err := txn.ReadRow(ctx, "Users", spanner.Key{user.ID}, []string{"id", "name", "money"})
+		if err != nil {
+			return err
+		}
+		
+		if err := row.ToStruct(&deleteUserData); err != nil {
+			return err
+		}
+		
 		stmt := spanner.Statement{
 			SQL: "DELETE FROM Users WHERE id = @id",
 			Params: map[string]interface{}{
 				"id": user.ID,
 			},
 		}
-		_, err := txn.Update(ctx, stmt)
+		count, err := txn.Update(ctx, stmt)
 		if err != nil {
-			return fmt.Errorf("Failed to delete user: %w", err)
+			return err
+		} else if count == 0 {
+			return fmt.Errorf("Not found user id")
 		}
 		return nil
 	})
@@ -184,28 +277,5 @@ func deleteUser(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
-// IDでユーザー取得する
-func findUser(c *gin.Context) *User {
-	var responseUser User
-	if err := c.BindJSON(&responseUser); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return nil
-	}
-	key := spanner.Key{responseUser.ID}
-
-	row, getUserErr := spannerClient.ReadOnlyTransaction().ReadRow(context.Background(), "Users", key, []string{"id", "name", "money"})
-	if getUserErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Not found user id", "data": getUserErr.Error()})
-		return nil
-	}
-
-	var postUser User
-	if err := row.ToStruct(&postUser); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Not found user id", "data": err.Error()})
-		return nil
-	}
-	return &postUser
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "deleteUser": deleteUserData})
 }
