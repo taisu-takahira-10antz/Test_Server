@@ -1,4 +1,4 @@
-module test-api
+module EmulatorAndApiServerTest
 
 go 1.19
 
@@ -33,7 +33,9 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421 // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.1 // indirect
+	github.com/shopspring/decimal v1.4.0
 	github.com/ugorji/go/codec v1.2.7 // indirect
+	go.mercari.io/go-bps v1.1.1
 	go.opencensus.io v0.24.0 // indirect
 	golang.org/x/crypto v0.0.0-20210711020723-a769d52b0f97 // indirect
 	golang.org/x/net v0.0.0-20221014081412-f15817d10f9b // indirect
